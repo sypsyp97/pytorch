@@ -84,7 +84,6 @@ from .ctx_manager import (
     ProfilerRecordFunctionContextVariable,
     TorchFunctionDisableVariable,
 )
-from .dicts import ConstDictVariable
 from .distributed import DistributedVariable, ProcessGroupVariable
 from .functions import bind_args_cached, NestedUserFunctionVariable
 from .lists import ListVariable, NamedTupleVariable, TupleVariable
@@ -2446,6 +2445,7 @@ For now, dynamo will explicitly graph break when it encounters user code with th
 
         from .base import AsPythonConstantNotImplementedError
         from .builder import SourcelessBuilder, wrap_fx_proxy
+        from .higher_order_ops import _make_inlined
 
         # 1. Convert `args, kwargs` into pytree-flattened proxy forms.
         #
@@ -2453,14 +2453,12 @@ For now, dynamo will explicitly graph break when it encounters user code with th
         # then tree_flatten them, we just let Dynamo symbolically interpret
         # `tree_flatten((args, kwargs))`. This saves us from having to
         # worry about the reconstruction logic, side effects, and guards.
-        packed_input_vt = TupleVariable.build(
-            tx, (TupleVariable.build(tx, args), ConstDictVariable.build(tx, kwargs))
+        args_with_states, kwargs_with_states = self._extract_nn_module_states(
+            tx, args, kwargs
         )
-        out_vt = SourcelessBuilder.create(tx, tree_flatten).call_function(  # type: ignore[arg-type]
-            tx, [packed_input_vt], {}
-        )
-        assert isinstance(out_vt, TupleVariable) and len(out_vt.items) == 2
-        flat_args_vts, input_spec_vt = out_vt.items
+        flat_args_vts, input_spec_vt = _make_inlined(tx, tree_flatten)(
+            VariableTracker.build(tx, (args_with_states, kwargs_with_states))
+        ).unpack_var_sequence(tx)
         assert isinstance(flat_args_vts, ListVariable)
 
         # Handle the case when the input contains a non-graphable type.
